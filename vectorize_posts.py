@@ -274,10 +274,20 @@ def index():
         }
         let highlightLine = null;
         function clearHighlights() {
-            if (highlightLine !== null) {
-                Plotly.deleteTraces('plot', highlightLine);
-                highlightLine = null;
+            // Remove previous highlight line(s)
+            let plotDiv = document.getElementById('plot');
+            let traces = plotDiv.data.length;
+            // Remove all extra traces (lines) beyond the two main scatter traces
+            while (plotDiv.data.length > 2) {
+                Plotly.deleteTraces('plot', plotDiv.data.length - 1);
             }
+            highlightLine = null;
+            // Reset all node colors
+            if (plotData) {
+                Plotly.restyle('plot', { marker: { color: plotData[0].x.map(_ => 'blue') } }, [0]);
+                Plotly.restyle('plot', { marker: { color: plotData[1].x.map(_ => 'purple') } }, [1]);
+            }
+            // Remove selected class from all pair list items
             document.querySelectorAll('.pair-list li.selected').forEach(li => li.classList.remove('selected'));
         }
         function highlightPair_mutuals(idxA, idxB) {
@@ -367,14 +377,27 @@ def index():
                     let my_uri = pair.my_uri, other_uri = pair.mutuals_uri;
                     return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair_mutuals(${idxA},${idxB});this.classList.add('selected');">
                         <b>${label} pair (mutuals)</b> (distance: ${pair.distance.toFixed(4)})<br>
-                        <span><a href="#" onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
-                        <span><a href="#" onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
+                        <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
+                        <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
                     </li>`;
                 }
                 html += pairItem(stats.closest_mutuals, 'Closest');
                 html += pairItem(stats.farthest_mutuals, 'Farthest');
                 html += '</ul>';
                 document.getElementById('pairs').innerHTML = html;
+                // Add click listeners to ensure both pairs work
+                setTimeout(() => {
+                    document.getElementById('Closestmutuals').onclick = function() {
+                        clearHighlights();
+                        highlightPair_mutuals(stats.closest_mutuals.indices[0], stats.closest_mutuals.indices[1]);
+                        this.classList.add('selected');
+                    };
+                    document.getElementById('Farthestmutuals').onclick = function() {
+                        clearHighlights();
+                        highlightPair_mutuals(stats.farthest_mutuals.indices[0], stats.farthest_mutuals.indices[1]);
+                        this.classList.add('selected');
+                    };
+                }, 0);
             });
         });
         </script>
