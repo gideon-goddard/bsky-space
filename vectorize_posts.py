@@ -60,11 +60,28 @@ def get_vectors():
     my_vectors = vectorize_posts(my_posts)
     discover_posts = fetch_discover_posts(limit=len(my_posts))
     discover_vectors = vectorize_posts(discover_posts)
+    # Get URIs for each post
+    my_uris = []
+    feed = client.get_author_feed(BLUESKY_HANDLE)
+    for item in feed.feed:
+        try:
+            my_uris.append(item.post.uri)
+        except AttributeError:
+            my_uris.append("")
+    discover_uris = []
+    discover_feed = client.get_timeline(limit=len(my_posts))
+    for item in discover_feed.feed:
+        try:
+            discover_uris.append(item.post.uri)
+        except AttributeError:
+            discover_uris.append("")
     return JSONResponse({
         "my_vectors": my_vectors.tolist(),
         "my_posts": my_posts,
+        "my_uris": my_uris,
         "discover_vectors": discover_vectors.tolist(),
-        "discover_posts": discover_posts
+        "discover_posts": discover_posts,
+        "discover_uris": discover_uris
     })
 
 @app.get("/")
@@ -80,29 +97,37 @@ def index():
         <h2>3D Visualization of Your Bluesky Posts vs Discover Feed</h2>
         <div id="plot" style="width:100vw;height:90vh;"></div>
         <script>
+        function openPost(uri) {
+            if (!uri) return;
+            // Bluesky web link format
+            let url = 'https://bsky.app/profile/' + uri.split('/')[2] + '/post/' + uri.split('/')[4];
+            window.open(url, '_blank');
+        }
         fetch('/vectors').then(r => r.json()).then(data => {
             let my_vectors = data.my_vectors;
             let my_posts = data.my_posts;
+            let my_uris = data.my_uris;
             let discover_vectors = data.discover_vectors;
             let discover_posts = data.discover_posts;
+            let discover_uris = data.discover_uris;
             // Use first 3 dimensions for 3D plot
             let x1 = my_vectors.map(v => v[0]);
             let y1 = my_vectors.map(v => v[1]);
             let z1 = my_vectors.map(v => v[2]);
-            let text1 = my_posts;
             let x2 = discover_vectors.map(v => v[0]);
             let y2 = discover_vectors.map(v => v[1]);
             let z2 = discover_vectors.map(v => v[2]);
-            let text2 = discover_posts;
             let trace1 = {
                 x: x1,
                 y: y1,
                 z: z1,
                 mode: 'markers',
                 type: 'scatter3d',
-                text: text1,
+                text: my_posts.map((t, i) => `<b>My Post</b><br>${t}`),
                 marker: { size: 5, color: 'blue' },
-                name: 'My Posts'
+                name: 'My Posts',
+                customdata: my_uris,
+                hovertemplate: '%{text}<extra></extra>'
             };
             let trace2 = {
                 x: x2,
@@ -110,11 +135,21 @@ def index():
                 z: z2,
                 mode: 'markers',
                 type: 'scatter3d',
-                text: text2,
+                text: discover_posts.map((t, i) => `<b>Discover</b><br>${t}`),
                 marker: { size: 5, color: 'red' },
-                name: 'Discover Feed'
+                name: 'Discover Feed',
+                customdata: discover_uris,
+                hovertemplate: '%{text}<extra></extra>'
             };
-            Plotly.newPlot('plot', [trace1, trace2], {margin: {l:0,r:0,b:0,t:0}});
+            let layout = {margin: {l:0,r:0,b:0,t:0}};
+            let config = {responsive: true};
+            Plotly.newPlot('plot', [trace1, trace2], layout, config);
+            var plotDiv = document.getElementById('plot');
+            plotDiv.on('plotly_click', function(data){
+                var point = data.points[0];
+                var uri = point.customdata;
+                openPost(uri);
+            });
         });
         </script>
     </body>
