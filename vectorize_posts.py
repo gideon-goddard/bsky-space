@@ -142,19 +142,19 @@ def get_my_data():
     # Fetch mutuals posts and vectors
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
     mutuals_vectors = vectorize_posts(mutuals_posts)
-    # Calculate cross-set distances
+    # Calculate cross-set distances using only the first 3 dimensions
     print("Calculating cross-set closest/farthest pairs...")
-    arr_my = np.array(vectors)
-    arr_mutuals = np.array(mutuals_vectors)
+    arr_my = np.array(vectors)[:, :3]
+    arr_mutuals = np.array(mutuals_vectors)[:, :3]
     n_my = len(arr_my)
     n_mutuals = len(arr_mutuals)
     min_dist_mutuals = float('inf')
     max_dist_mutuals = float('-inf')
     min_pair_mutuals = None
     max_pair_mutuals = None
-    for i in tqdm(range(len(vectors)), desc="Pairwise distance to mutuals"):
+    for i in tqdm(range(n_my), desc="Pairwise distance to mutuals"):
         for j in range(n_mutuals):
-            dist = np.linalg.norm(np.array(vectors[i]) - arr_mutuals[j])
+            dist = np.linalg.norm(arr_my[i] - arr_mutuals[j])
             if dist < min_dist_mutuals:
                 min_dist_mutuals = dist
                 min_pair_mutuals = (i, j)
