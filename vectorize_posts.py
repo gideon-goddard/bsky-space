@@ -5,6 +5,7 @@ from sentence_transformers import SentenceTransformer
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
+from tqdm import tqdm
 
 # Load environment variables
 load_dotenv()
@@ -19,45 +20,61 @@ client.login(BLUESKY_HANDLE, BLUESKY_PASSWORD)
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def fetch_my_posts():
-    # Fetch all posts from your Bluesky feed using cursor pagination
+    print("Fetching all your posts...")
     posts = []
     cursor = None
+    page = 1
     while True:
+        print(f"Fetching page {page} of your posts...")
         feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
-        for item in feed.feed:
+        page_posts = []
+        for item in tqdm(feed.feed, desc=f"Processing page {page} posts", leave=False):
             try:
                 text = item.post.record.text
                 if text:
                     posts.append(text)
+                    page_posts.append(text)
             except AttributeError:
                 continue
+        print(f"Fetched {len(page_posts)} posts from page {page}.")
         cursor = getattr(feed, 'cursor', None)
         if not cursor:
             break
+        page += 1
+    print(f"Total posts fetched: {len(posts)}")
     return posts
 
 def fetch_discover_posts(limit=50):
-    # Fetch up to 'limit' posts from the discover feed using cursor pagination
+    print(f"Fetching up to {limit} posts from the discover feed...")
     posts = []
     cursor = None
+    page = 1
     while len(posts) < limit:
         batch_limit = min(100, limit - len(posts))
+        print(f"Fetching page {page} of discover feed (batch size: {batch_limit})...")
         feed = client.get_timeline(limit=batch_limit, cursor=cursor)
-        for item in feed.feed:
+        page_posts = []
+        for item in tqdm(feed.feed, desc=f"Processing discover page {page}", leave=False):
             try:
                 text = item.post.record.text
                 if text:
                     posts.append(text)
+                    page_posts.append(text)
             except AttributeError:
                 continue
+        print(f"Fetched {len(page_posts)} discover posts from page {page}.")
         cursor = getattr(feed, 'cursor', None)
         if not cursor or not feed.feed:
             break
+        page += 1
+    print(f"Total discover posts fetched: {len(posts)}")
     return posts
 
 def vectorize_posts(posts):
-    # Vectorize post texts
-    return model.encode(posts)
+    print(f"Vectorizing {len(posts)} posts...")
+    vectors = model.encode(posts, show_progress_bar=True)
+    print("Vectorization complete.")
+    return vectors
 
 def process_firehose_post(post):
     # Vectorize a single post from firehose
@@ -72,20 +89,38 @@ def get_vectors():
     discover_posts = fetch_discover_posts(limit=len(my_posts))
     discover_vectors = vectorize_posts(discover_posts)
     # Get URIs for each post
+    print("Fetching URIs for your posts...")
     my_uris = []
-    feed = client.get_author_feed(BLUESKY_HANDLE)
-    for item in feed.feed:
-        try:
-            my_uris.append(item.post.uri)
-        except AttributeError:
-            my_uris.append("")
+    cursor = None
+    total_uris = 0
+    while total_uris < len(my_posts):
+        batch_limit = min(100, len(my_posts) - total_uris)
+        feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
+        for item in feed.feed:
+            try:
+                my_uris.append(item.post.uri)
+            except AttributeError:
+                my_uris.append("")
+        cursor = getattr(feed, 'cursor', None)
+        total_uris += len(feed.feed)
+        if not cursor or not feed.feed:
+            break
+    print("Fetching URIs for discover posts...")
     discover_uris = []
-    discover_feed = client.get_timeline(limit=len(my_posts))
-    for item in discover_feed.feed:
-        try:
-            discover_uris.append(item.post.uri)
-        except AttributeError:
-            discover_uris.append("")
+    cursor = None
+    total_uris = 0
+    while total_uris < len(discover_posts):
+        batch_limit = min(100, len(discover_posts) - total_uris)
+        feed = client.get_timeline(limit=batch_limit, cursor=cursor)
+        for item in feed.feed:
+            try:
+                discover_uris.append(item.post.uri)
+            except AttributeError:
+                discover_uris.append("")
+        cursor = getattr(feed, 'cursor', None)
+        total_uris += len(feed.feed)
+        if not cursor or not feed.feed:
+            break
     return JSONResponse({
         "my_vectors": my_vectors.tolist(),
         "my_posts": my_posts,
