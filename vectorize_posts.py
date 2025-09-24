@@ -8,6 +8,7 @@ import uvicorn
 from tqdm import tqdm
 import numpy as np
 from functools import lru_cache
+import math
 
 # Load environment variables
 load_dotenv()
@@ -85,9 +86,8 @@ def process_firehose_post(post):
 @lru_cache(maxsize=1)
 def get_my_data():
     print("Fetching and vectorizing all your posts (cached)...")
-    posts = fetch_my_posts()
+    posts = fetch_my_posts()[:50]  # Limit to 50 posts for development
     vectors = vectorize_posts(posts)
-    # Get URIs for each post
     print("Fetching URIs for your posts...")
     uris = []
     cursor = None
@@ -106,33 +106,94 @@ def get_my_data():
             pbar.update(len(feed.feed))
             if not cursor or not feed.feed:
                 break
-    # Compute closest/farthest pairs
-    print("Calculating closest/farthest pairs...")
-    arr = np.array(vectors)
-    dists = np.linalg.norm(arr[:,None,:] - arr[None,:,:], axis=-1)
-    np.fill_diagonal(dists, np.inf)
-    min_idx = np.unravel_index(np.argmin(dists), dists.shape)
-    max_idx = np.unravel_index(np.argmax(dists), dists.shape)
+    # Fetch discover posts and vectors for cross-set distance calculation
+    discover_posts = fetch_discover_posts(limit=len(posts))
+    discover_vectors = vectorize_posts(discover_posts)
+    print("Fetching URIs for discover posts...")
+    discover_uris = []
+    cursor = None
+    total_uris = 0
+    with tqdm(total=len(discover_posts), desc="Fetching URIs for discover posts") as pbar:
+        while total_uris < len(discover_posts):
+            batch_limit = min(100, len(discover_posts) - total_uris)
+            feed = client.get_timeline(limit=batch_limit, cursor=cursor)
+            for item in tqdm(feed.feed, desc=f"Processing discover URI batch", leave=False):
+                try:
+                    discover_uris.append(item.post.uri)
+                except AttributeError:
+                    discover_uris.append("")
+            cursor = getattr(feed, 'cursor', None)
+            total_uris += len(feed.feed)
+            pbar.update(len(feed.feed))
+            if not cursor or not feed.feed:
+                break
+    # Calculate cross-set distances
+    print("Calculating cross-set closest/farthest pairs...")
+    arr_my = np.array(vectors)
+    arr_discover = np.array(discover_vectors)
+    n_my = len(arr_my)
+    n_discover = len(arr_discover)
+    min_dist = float('inf')
+    max_dist = float('-inf')
+    min_pair = None
+    max_pair = None
+    for i in tqdm(range(n_my), desc="Cross-set pairwise distance calculation"):
+        for j in range(n_discover):
+            dist = np.linalg.norm(arr_my[i] - arr_discover[j])
+            if dist < min_dist:
+                min_dist = dist
+                min_pair = (i, j)
+            if dist > max_dist:
+                max_dist = dist
+                max_pair = (i, j)
     closest = {
-        "indices": min_idx,
-        "distance": float(dists[min_idx]),
-        "posts": [posts[min_idx[0]], posts[min_idx[1]]],
-        "uris": [uris[min_idx[0]], uris[min_idx[1]]]
+        "indices": (int(min_pair[0]), int(min_pair[1])),
+        "distance": float(min_dist),
+        "my_post": posts[min_pair[0]],
+        "my_uri": uris[min_pair[0]],
+        "discover_post": discover_posts[min_pair[1]],
+        "discover_uri": discover_uris[min_pair[1]]
     }
     farthest = {
-        "indices": max_idx,
-        "distance": float(dists[max_idx]),
-        "posts": [posts[max_idx[0]], posts[max_idx[1]]],
-        "uris": [uris[max_idx[0]], uris[max_idx[1]]]
+        "indices": (int(max_pair[0]), int(max_pair[1])),
+        "distance": float(max_dist),
+        "my_post": posts[max_pair[0]],
+        "my_uri": uris[max_pair[0]],
+        "discover_post": discover_posts[max_pair[1]],
+        "discover_uri": discover_uris[max_pair[1]]
     }
-    print("Pair calculations complete.")
+    print("Cross-set pair calculations complete.")
     return {
         "posts": posts,
         "vectors": vectors,
         "uris": uris,
+        "discover_posts": discover_posts,
+        "discover_vectors": discover_vectors,
+        "discover_uris": discover_uris,
         "closest": closest,
         "farthest": farthest
     }
+
+def sanitize_json(obj):
+    if isinstance(obj, dict):
+        return {k: sanitize_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_json(v) for v in obj]
+    elif isinstance(obj, np.ndarray):
+        return sanitize_json(obj.tolist())
+    elif isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        v = float(obj)
+        if math.isinf(v) or math.isnan(v):
+            return None
+        return v
+    elif isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None
+        return obj
+    else:
+        return obj
 
 app = FastAPI()
 
@@ -159,21 +220,26 @@ def get_vectors():
             pbar.update(len(feed.feed))
             if not cursor or not feed.feed:
                 break
-    return JSONResponse({
-        "my_vectors": data["vectors"].tolist(),
+    result = {
+        "my_vectors": data["vectors"],
         "my_posts": data["posts"],
         "my_uris": data["uris"],
-        "discover_vectors": discover_vectors.tolist(),
+        "discover_vectors": discover_vectors,
         "discover_posts": discover_posts,
         "discover_uris": discover_uris,
         "closest": data["closest"],
         "farthest": data["farthest"]
-    })
+    }
+    return JSONResponse(sanitize_json(result))
 
 @app.get("/stats")
 def get_stats():
     data = get_my_data()
-    return JSONResponse({"closest": data["closest"], "farthest": data["farthest"]})
+    # Return new closest/farthest structure
+    return JSONResponse({
+        "closest": data["closest"],
+        "farthest": data["farthest"]
+    })
 
 @app.get("/highlighted")
 def highlighted():
@@ -199,22 +265,28 @@ def index():
         <div id="pairs" style="width:100vw;"></div>
         <script>
         let plotData, plotDiv;
+        function uriToUrl(uri) {
+            // Example: at://did:plc:xxxx/app.bsky.feed.post/xxxx
+            let parts = uri.split('/');
+            if (parts.length < 5) return '';
+            let did = parts[2];
+            let rkey = parts[4];
+            return `https://bsky.app/profile/${did}/post/${rkey}`;
+        }
         function openPost(uri) {
-            if (!uri) return;
-            let url = 'https://bsky.app/profile/' + uri.split('/')[2] + '/post/' + uri.split('/')[4];
-            window.open(url, '_blank');
+            let url = uriToUrl(uri);
+            if (url) window.open(url, '_blank');
         }
         function highlightPair(idxA, idxB) {
-            // Highlight points in Plotly
             let update = {
                 'marker': { color: plotData[0].marker.color.slice() }
             };
-            // Set all to blue, then highlight selected
             let colors = plotData[0].x.map(_ => 'blue');
-            colors[idxA] = 'lime';
-            colors[idxB] = 'orange';
-            update.marker.color = colors;
+            if (typeof idxA === 'number') colors[idxA] = 'lime';
             Plotly.restyle('plot', update, [0]);
+            let colors2 = plotData[1].x.map(_ => 'red');
+            if (typeof idxB === 'number') colors2[idxB] = 'orange';
+            Plotly.restyle('plot', { marker: { color: colors2 } }, [1]);
         }
         fetch('/vectors').then(r => r.json()).then(data => {
             plotData = [];
@@ -270,12 +342,12 @@ def index():
                 let html = '<h3>Closest and Farthest Pairs</h3><ul class="pair-list">';
                 function pairItem(pair, label) {
                     let idxA = pair.indices[0], idxB = pair.indices[1];
-                    let postA = pair.posts[0], postB = pair.posts[1];
-                    let uriA = pair.uris[0], uriB = pair.uris[1];
+                    let my_post = pair.my_post, discover_post = pair.discover_post;
+                    let my_uri = pair.my_uri, discover_uri = pair.discover_uri;
                     return `<li id="${label}" onclick="highlightPair(${idxA},${idxB});this.classList.add('selected');">
                         <b>${label} pair</b> (distance: ${pair.distance.toFixed(4)})<br>
-                        <span><a href="#" onclick="event.stopPropagation();openPost('${uriA}')">A: ${postA}</a></span><br>
-                        <span><a href="#" onclick="event.stopPropagation();openPost('${uriB}')">B: ${postB}</a></span>
+                        <span><a href="#" onclick="event.stopPropagation();openPost('${my_uri}')">My Post: ${my_post}</a></span><br>
+                        <span><a href="#" onclick="event.stopPropagation();openPost('${discover_uri}')">Discover: ${discover_post}</a></span>
                     </li>`;
                 }
                 html += pairItem(stats.closest, 'Closest');
