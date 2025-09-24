@@ -274,38 +274,26 @@ def index():
         }
         let highlightLine = null;
         function clearHighlights() {
-            // Remove previous highlight line(s)
             let plotDiv = document.getElementById('plot');
-            let traces = plotDiv.data.length;
-            // Remove all extra traces (lines) beyond the two main scatter traces
+            // Remove all extra traces (lines) beyond the main scatter traces
             while (plotDiv.data.length > 2) {
                 Plotly.deleteTraces('plot', plotDiv.data.length - 1);
             }
             highlightLine = null;
-            // Reset all node colors
+            // Reset all node colors (no highlight)
             if (plotData) {
-                Plotly.restyle('plot', { marker: { color: plotData[0].x.map(_ => 'blue') } }, [0]);
-                Plotly.restyle('plot', { marker: { color: plotData[1].x.map(_ => 'purple') } }, [1]);
+                Plotly.restyle('plot', { marker: { color: Array(plotData[0].x.length).fill('blue'), size: 5 } }, [0]);
+                Plotly.restyle('plot', { marker: { color: Array(plotData[1].x.length).fill('purple'), size: 5 } }, [1]);
             }
-            // Remove selected class from all pair list items
             document.querySelectorAll('.pair-list li.selected').forEach(li => li.classList.remove('selected'));
         }
-        function highlightPair_mutuals(idxA, idxB) {
+        function highlightPair(idxA, idxB) {
             clearHighlights();
-            let colors = plotData[0].x.map(_ => 'blue');
-            let colors2 = plotData[1].x.map(_ => 'purple');
-            for (let i = 0; i < colors.length; i++) colors[i] = 'blue';
-            for (let i = 0; i < colors2.length; i++) colors2[i] = 'purple';
-            let isClosest = document.getElementById('Closestmutuals').classList.contains('selected');
-            let nodeColor = isClosest ? 'lime' : 'orange';
-            colors[idxA] = nodeColor;
-            colors2[idxB] = nodeColor;
-            Plotly.restyle('plot', { marker: { color: colors } }, [0]);
-            Plotly.restyle('plot', { marker: { color: colors2 } }, [1]);
+            // Only draw the line, do not change node colors or sizes
             if (typeof idxA === 'number' && typeof idxB === 'number') {
                 let xA = plotData[0].x[idxA], yA = plotData[0].y[idxA], zA = plotData[0].z[idxA];
                 let xB = plotData[1].x[idxB], yB = plotData[1].y[idxB], zB = plotData[1].z[idxB];
-                let lineColor = nodeColor;
+                let lineColor = 'orange';
                 let lineTrace = {
                     x: [xA, xB],
                     y: [yA, yB],
@@ -370,13 +358,13 @@ def index():
             });
             // Pair results UI
             fetch('/stats').then(r => r.json()).then(stats => {
-                let html = '<h3>Closest and Farthest Pairs (Mutuals)</h3><ul class="pair-list">';
+                let html = '<h3>Closest and Farthest Pairs</h3><ul class="pair-list">';
                 function pairItem(pair, label) {
                     let idxA = pair.indices[0], idxB = pair.indices[1];
                     let my_post = pair.my_post, other_post = pair.mutuals_post;
                     let my_uri = pair.my_uri, other_uri = pair.mutuals_uri;
-                    return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair_mutuals(${idxA},${idxB});this.classList.add('selected');">
-                        <b>${label} pair (mutuals)</b> (distance: ${pair.distance.toFixed(4)})<br>
+                    return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair(${idxA},${idxB});this.classList.add('selected');">
+                        <b>${label} pair</b> (distance: ${pair.distance.toFixed(4)})<br>
                         <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
                         <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
                     </li>`;
@@ -385,19 +373,6 @@ def index():
                 html += pairItem(stats.farthest_mutuals, 'Farthest');
                 html += '</ul>';
                 document.getElementById('pairs').innerHTML = html;
-                // Add click listeners to ensure both pairs work
-                setTimeout(() => {
-                    document.getElementById('Closestmutuals').onclick = function() {
-                        clearHighlights();
-                        highlightPair_mutuals(stats.closest_mutuals.indices[0], stats.closest_mutuals.indices[1]);
-                        this.classList.add('selected');
-                    };
-                    document.getElementById('Farthestmutuals').onclick = function() {
-                        clearHighlights();
-                        highlightPair_mutuals(stats.farthest_mutuals.indices[0], stats.farthest_mutuals.indices[1]);
-                        this.classList.add('selected');
-                    };
-                }, 0);
             });
         });
         </script>
