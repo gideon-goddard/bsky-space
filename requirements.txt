@@ -1,0 +1,6 @@
+atproto
+python-dotenv
+sentence-transformers
+fastapi
+# torch is not included directly; install CPU-only torch separately:
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
