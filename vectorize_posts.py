@@ -19,29 +19,40 @@ client.login(BLUESKY_HANDLE, BLUESKY_PASSWORD)
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def fetch_my_posts():
-    # Fetch posts from your Bluesky feed
-    feed = client.get_author_feed(BLUESKY_HANDLE)
+    # Fetch all posts from your Bluesky feed using cursor pagination
     posts = []
-    for item in feed.feed:
-        try:
-            text = item.post.record.text
-            if text:
-                posts.append(text)
-        except AttributeError:
-            continue
+    cursor = None
+    while True:
+        feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
+        for item in feed.feed:
+            try:
+                text = item.post.record.text
+                if text:
+                    posts.append(text)
+            except AttributeError:
+                continue
+        cursor = getattr(feed, 'cursor', None)
+        if not cursor:
+            break
     return posts
 
 def fetch_discover_posts(limit=50):
-    # Fetch posts from the discover feed
-    feed = client.get_timeline(limit=limit)
+    # Fetch up to 'limit' posts from the discover feed using cursor pagination
     posts = []
-    for item in feed.feed:
-        try:
-            text = item.post.record.text
-            if text:
-                posts.append(text)
-        except AttributeError:
-            continue
+    cursor = None
+    while len(posts) < limit:
+        batch_limit = min(100, limit - len(posts))
+        feed = client.get_timeline(limit=batch_limit, cursor=cursor)
+        for item in feed.feed:
+            try:
+                text = item.post.record.text
+                if text:
+                    posts.append(text)
+            except AttributeError:
+                continue
+        cursor = getattr(feed, 'cursor', None)
+        if not cursor or not feed.feed:
+            break
     return posts
 
 def vectorize_posts(posts):
