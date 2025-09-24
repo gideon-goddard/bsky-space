@@ -139,55 +139,19 @@ def get_my_data():
             pbar.update(len(feed.feed))
             if not cursor or not feed.feed:
                 break
-    # Fetch discover posts and vectors for cross-set distance calculation
-    discover_posts = fetch_discover_posts(limit=len(posts))
-    discover_vectors = vectorize_posts(discover_posts)
-    print("Fetching URIs for discover posts...")
-    discover_uris = []
-    cursor = None
-    total_uris = 0
-    with tqdm(total=len(discover_posts), desc="Fetching URIs for discover posts") as pbar:
-        while total_uris < len(discover_posts):
-            batch_limit = min(100, len(discover_posts) - total_uris)
-            feed = client.get_timeline(limit=batch_limit, cursor=cursor)
-            for item in tqdm(feed.feed, desc=f"Processing discover URI batch", leave=False):
-                try:
-                    discover_uris.append(item.post.uri)
-                except AttributeError:
-                    discover_uris.append("")
-            cursor = getattr(feed, 'cursor', None)
-            total_uris += len(feed.feed)
-            pbar.update(len(feed.feed))
-            if not cursor or not feed.feed:
-                break
     # Fetch mutuals posts and vectors
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
     mutuals_vectors = vectorize_posts(mutuals_posts)
     # Calculate cross-set distances
     print("Calculating cross-set closest/farthest pairs...")
     arr_my = np.array(vectors)
-    arr_discover = np.array(discover_vectors)
     arr_mutuals = np.array(mutuals_vectors)
     n_my = len(arr_my)
-    n_discover = len(arr_discover)
     n_mutuals = len(arr_mutuals)
-    min_dist = float('inf')
-    max_dist = float('-inf')
-    min_pair = None
-    max_pair = None
     min_dist_mutuals = float('inf')
     max_dist_mutuals = float('-inf')
     min_pair_mutuals = None
     max_pair_mutuals = None
-    for i in tqdm(range(n_my), desc="Cross-set pairwise distance calculation"):
-        for j in range(n_discover):
-            dist = np.linalg.norm(arr_my[i] - arr_discover[j])
-            if dist < min_dist:
-                min_dist = dist
-                min_pair = (i, j)
-            if dist > max_dist:
-                max_dist = dist
-                max_pair = (i, j)
     for i in tqdm(range(len(vectors)), desc="Pairwise distance to mutuals"):
         for j in range(n_mutuals):
             dist = np.linalg.norm(np.array(vectors[i]) - arr_mutuals[j])
@@ -197,22 +161,6 @@ def get_my_data():
             if dist > max_dist_mutuals:
                 max_dist_mutuals = dist
                 max_pair_mutuals = (i, j)
-    closest = {
-        "indices": (int(min_pair[0]), int(min_pair[1])),
-        "distance": float(min_dist),
-        "my_post": posts[min_pair[0]],
-        "my_uri": uris[min_pair[0]],
-        "discover_post": discover_posts[min_pair[1]],
-        "discover_uri": discover_uris[min_pair[1]]
-    }
-    farthest = {
-        "indices": (int(max_pair[0]), int(max_pair[1])),
-        "distance": float(max_dist),
-        "my_post": posts[max_pair[0]],
-        "my_uri": uris[max_pair[0]],
-        "discover_post": discover_posts[max_pair[1]],
-        "discover_uri": discover_uris[max_pair[1]]
-    }
     closest_mutuals = {
         "indices": (int(min_pair_mutuals[0]), int(min_pair_mutuals[1])),
         "distance": float(min_dist_mutuals),
@@ -234,14 +182,9 @@ def get_my_data():
         "posts": posts,
         "vectors": vectors,
         "uris": uris,
-        "discover_posts": discover_posts,
-        "discover_vectors": discover_vectors,
-        "discover_uris": discover_uris,
         "mutuals_posts": mutuals_posts,
         "mutuals_vectors": mutuals_vectors,
         "mutuals_uris": mutuals_uris,
-        "closest": closest,
-        "farthest": farthest,
         "closest_mutuals": closest_mutuals,
         "farthest_mutuals": farthest_mutuals
     }
@@ -272,40 +215,15 @@ app = FastAPI()
 @app.get("/vectors")
 def get_vectors():
     data = get_my_data()
-    discover_posts = fetch_discover_posts(limit=len(data["posts"]))
-    discover_vectors = vectorize_posts(discover_posts)
-    discover_uris = []
-    cursor = None
-    total_uris = 0
-    with tqdm(total=len(discover_posts), desc="Fetching URIs for discover posts") as pbar:
-        while total_uris < len(discover_posts):
-            batch_limit = min(100, len(discover_posts) - total_uris)
-            feed = client.get_timeline(limit=batch_limit, cursor=cursor)
-            for item in tqdm(feed.feed, desc=f"Processing discover URI batch", leave=False):
-                try:
-                    discover_uris.append(item.post.uri)
-                except AttributeError:
-                    discover_uris.append("")
-            cursor = getattr(feed, 'cursor', None)
-            total_uris += len(feed.feed)
-            pbar.update(len(feed.feed))
-            if not cursor or not feed.feed:
-                break
-    # Fetch mutuals posts for the endpoint
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(data["posts"]))
     mutuals_vectors = vectorize_posts(mutuals_posts)
     result = {
         "my_vectors": data["vectors"],
         "my_posts": data["posts"],
         "my_uris": data["uris"],
-        "discover_vectors": discover_vectors,
-        "discover_posts": discover_posts,
-        "discover_uris": discover_uris,
         "mutuals_vectors": mutuals_vectors,
         "mutuals_posts": mutuals_posts,
         "mutuals_uris": mutuals_uris,
-        "closest": data["closest"],
-        "farthest": data["farthest"],
         "closest_mutuals": data["closest_mutuals"],
         "farthest_mutuals": data["farthest_mutuals"]
     }
@@ -315,8 +233,6 @@ def get_vectors():
 def get_stats():
     data = get_my_data()
     return JSONResponse({
-        "closest": data["closest"],
-        "farthest": data["farthest"],
         "closest_mutuals": data["closest_mutuals"],
         "farthest_mutuals": data["farthest_mutuals"]
     })
@@ -340,16 +256,15 @@ def index():
         </style>
     </head>
     <body>
-        <h2>3D Visualization of Your Bluesky Posts vs Discover Feed</h2>
+        <h2>3D Visualization of Your Bluesky Posts vs Mutuals Feed</h2>
         <div id="plot" style="width:100vw;height:70vh;"></div>
         <div id="pairs" style="width:100vw;"></div>
         <script>
         let plotData, plotDiv;
         function uriToUrl(uri) {
-            // Example: at://did:plc:xxxx/app.bsky.feed.post/yyyy
             let parts = uri.split('/');
             if (parts.length < 5) return '';
-            let did = parts[2]; // includes 'did:plc:xxxx'
+            let did = parts[2];
             let rkey = parts[4];
             return `https://bsky.app/profile/${did}/post/${rkey}`;
         }
@@ -358,47 +273,17 @@ def index():
             if (url) window.open(url, '_blank');
         }
         let highlightLine = null;
-        function highlightPair(idxA, idxB) {
-            // Highlight points in Plotly
-            let colors = plotData[0].x.map(_ => 'blue');
-            let colors2 = plotData[1].x.map(_ => 'red');
-            // Reset all nodes
-            for (let i = 0; i < colors.length; i++) colors[i] = 'blue';
-            for (let i = 0; i < colors2.length; i++) colors2[i] = 'red';
-            // Highlight selected nodes
-            let isClosest = document.getElementById('Closest').classList.contains('selected');
-            let nodeColor = isClosest ? 'lime' : 'orange';
-            colors[idxA] = nodeColor;
-            colors2[idxB] = nodeColor;
-            Plotly.restyle('plot', { marker: { color: colors } }, [0]);
-            Plotly.restyle('plot', { marker: { color: colors2 } }, [1]);
-            // Remove previous highlight line
+        function clearHighlights() {
             if (highlightLine !== null) {
                 Plotly.deleteTraces('plot', highlightLine);
                 highlightLine = null;
             }
-            // Draw line between selected pair
-            if (typeof idxA === 'number' && typeof idxB === 'number') {
-                let xA = plotData[0].x[idxA], yA = plotData[0].y[idxA], zA = plotData[0].z[idxA];
-                let xB = plotData[1].x[idxB], yB = plotData[1].y[idxB], zB = plotData[1].z[idxB];
-                let lineColor = nodeColor;
-                let lineTrace = {
-                    x: [xA, xB],
-                    y: [yA, yB],
-                    z: [zA, zB],
-                    mode: 'lines',
-                    type: 'scatter3d',
-                    line: { color: lineColor, width: 6 },
-                    showlegend: false
-                };
-                Plotly.addTraces('plot', lineTrace);
-                highlightLine = plotData.length; // index of the new trace
-            }
+            document.querySelectorAll('.pair-list li.selected').forEach(li => li.classList.remove('selected'));
         }
         function highlightPair_mutuals(idxA, idxB) {
-            // Highlight points in Plotly for mutuals
+            clearHighlights();
             let colors = plotData[0].x.map(_ => 'blue');
-            let colors2 = plotData[2].x.map(_ => 'purple');
+            let colors2 = plotData[1].x.map(_ => 'purple');
             for (let i = 0; i < colors.length; i++) colors[i] = 'blue';
             for (let i = 0; i < colors2.length; i++) colors2[i] = 'purple';
             let isClosest = document.getElementById('Closestmutuals').classList.contains('selected');
@@ -406,16 +291,10 @@ def index():
             colors[idxA] = nodeColor;
             colors2[idxB] = nodeColor;
             Plotly.restyle('plot', { marker: { color: colors } }, [0]);
-            Plotly.restyle('plot', { marker: { color: colors2 } }, [2]);
-            // Remove previous highlight line
-            if (highlightLine !== null) {
-                Plotly.deleteTraces('plot', highlightLine);
-                highlightLine = null;
-            }
-            // Draw line between selected pair
+            Plotly.restyle('plot', { marker: { color: colors2 } }, [1]);
             if (typeof idxA === 'number' && typeof idxB === 'number') {
                 let xA = plotData[0].x[idxA], yA = plotData[0].y[idxA], zA = plotData[0].z[idxA];
-                let xB = plotData[2].x[idxB], yB = plotData[2].y[idxB], zB = plotData[2].z[idxB];
+                let xB = plotData[1].x[idxB], yB = plotData[1].y[idxB], zB = plotData[1].z[idxB];
                 let lineColor = nodeColor;
                 let lineTrace = {
                     x: [xA, xB],
@@ -435,21 +314,15 @@ def index():
             let my_vectors = data.my_vectors;
             let my_posts = data.my_posts;
             let my_uris = data.my_uris;
-            let discover_vectors = data.discover_vectors;
-            let discover_posts = data.discover_posts;
-            let discover_uris = data.discover_uris;
             let mutuals_vectors = data.mutuals_vectors;
             let mutuals_posts = data.mutuals_posts;
             let mutuals_uris = data.mutuals_uris;
             let x1 = my_vectors.map(v => v[0]);
             let y1 = my_vectors.map(v => v[1]);
             let z1 = my_vectors.map(v => v[2]);
-            let x2 = discover_vectors.map(v => v[0]);
-            let y2 = discover_vectors.map(v => v[1]);
-            let z2 = discover_vectors.map(v => v[2]);
-            let x3 = mutuals_vectors.map(v => v[0]);
-            let y3 = mutuals_vectors.map(v => v[1]);
-            let z3 = mutuals_vectors.map(v => v[2]);
+            let x2 = mutuals_vectors.map(v => v[0]);
+            let y2 = mutuals_vectors.map(v => v[1]);
+            let z2 = mutuals_vectors.map(v => v[2]);
             plotData = [
                 {
                     x: x1,
@@ -469,20 +342,8 @@ def index():
                     z: z2,
                     mode: 'markers',
                     type: 'scatter3d',
-                    text: discover_posts.map((t, i) => `<b>Discover</b><br>${t}`),
-                    marker: { size: 5, color: 'red' },
-                    name: 'Discover Feed',
-                    customdata: discover_uris,
-                    hovertemplate: '%{text}<extra></extra>'
-                },
-                {
-                    x: x3,
-                    y: y3,
-                    z: z3,
-                    mode: 'markers',
-                    type: 'scatter3d',
                     text: mutuals_posts.map((t, i) => `<b>Mutuals</b><br>${t}`),
-                    marker: { size: 5, color: Array(x3.length).fill('purple') },
+                    marker: { size: 5, color: Array(x2.length).fill('purple') },
                     name: 'Mutuals Feed',
                     customdata: mutuals_uris,
                     hovertemplate: '%{text}<extra></extra>'
@@ -497,23 +358,21 @@ def index():
                 var uri = point.customdata;
                 openPost(uri);
             });
-            // Fetch closest/farthest pairs
+            // Pair results UI
             fetch('/stats').then(r => r.json()).then(stats => {
-                let html = '<h3>Closest and Farthest Pairs</h3><ul class="pair-list">';
-                function pairItem(pair, label, feedLabel) {
+                let html = '<h3>Closest and Farthest Pairs (Mutuals)</h3><ul class="pair-list">';
+                function pairItem(pair, label) {
                     let idxA = pair.indices[0], idxB = pair.indices[1];
-                    let my_post = pair.my_post, other_post = pair[feedLabel + '_post'];
-                    let my_uri = pair.my_uri, other_uri = pair[feedLabel + '_uri'];
-                    return `<li id="${label + feedLabel}" onclick="highlightPair_${feedLabel}(${idxA},${idxB});this.classList.add('selected');">
-                        <b>${label} pair (${feedLabel})</b> (distance: ${pair.distance.toFixed(4)})<br>
+                    let my_post = pair.my_post, other_post = pair.mutuals_post;
+                    let my_uri = pair.my_uri, other_uri = pair.mutuals_uri;
+                    return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair_mutuals(${idxA},${idxB});this.classList.add('selected');">
+                        <b>${label} pair (mutuals)</b> (distance: ${pair.distance.toFixed(4)})<br>
                         <span><a href="#" onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
-                        <span><a href="#" onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">${feedLabel.charAt(0).toUpperCase() + feedLabel.slice(1)}: ${other_post}</a></span>
+                        <span><a href="#" onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
                     </li>`;
                 }
-                html += pairItem(stats.closest, 'Closest', 'discover');
-                html += pairItem(stats.farthest, 'Farthest', 'discover');
-                html += pairItem(stats.closest_mutuals, 'Closest', 'mutuals');
-                html += pairItem(stats.farthest_mutuals, 'Farthest', 'mutuals');
+                html += pairItem(stats.closest_mutuals, 'Closest');
+                html += pairItem(stats.farthest_mutuals, 'Farthest');
                 html += '</ul>';
                 document.getElementById('pairs').innerHTML = html;
             });
