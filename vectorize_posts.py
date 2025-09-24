@@ -9,6 +9,7 @@ from tqdm import tqdm
 import numpy as np
 from functools import lru_cache
 import math
+from sklearn.decomposition import PCA
 
 # Load environment variables
 load_dotenv()
@@ -106,10 +107,14 @@ def fetch_mutuals_posts(limit=50):
     print(f"Total mutuals posts fetched: {len(posts)}")
     return posts, uris
 
-def vectorize_posts(posts):
+def vectorize_posts(posts, pca_model=None):
     print(f"Vectorizing {len(posts)} posts...")
     vectors = model.encode(posts, show_progress_bar=True)
     print("Vectorization complete.")
+    if pca_model is not None:
+        print("Reducing vectors to 3D with PCA...")
+        vectors = pca_model.transform(vectors)
+        print("PCA reduction complete.")
     return vectors
 
 def process_firehose_post(post):
@@ -120,7 +125,16 @@ def process_firehose_post(post):
 def get_my_data():
     print("Fetching and vectorizing all your posts (cached)...")
     posts = fetch_my_posts()[:50]  # Limit to 50 posts for development
-    vectors = vectorize_posts(posts)
+    raw_vectors = model.encode(posts, show_progress_bar=True)
+    # Fit PCA on all vectors (user + mutuals)
+    mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
+    raw_mutuals_vectors = model.encode(mutuals_posts, show_progress_bar=True)
+    all_vectors = np.vstack([raw_vectors, raw_mutuals_vectors])
+    print("Fitting PCA for 3D reduction...")
+    pca = PCA(n_components=3)
+    pca.fit(all_vectors)
+    vectors = pca.transform(raw_vectors)
+    mutuals_vectors = pca.transform(raw_mutuals_vectors)
     print("Fetching URIs for your posts...")
     uris = []
     cursor = None
@@ -139,13 +153,10 @@ def get_my_data():
             pbar.update(len(feed.feed))
             if not cursor or not feed.feed:
                 break
-    # Fetch mutuals posts and vectors
-    mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
-    mutuals_vectors = vectorize_posts(mutuals_posts)
-    # Calculate cross-set distances using only the first 3 dimensions
+    # Calculate cross-set distances using only the 3D PCA vectors
     print("Calculating cross-set closest/farthest pairs...")
-    arr_my = np.array(vectors)[:, :3]
-    arr_mutuals = np.array(mutuals_vectors)[:, :3]
+    arr_my = np.array(vectors)
+    arr_mutuals = np.array(mutuals_vectors)
     n_my = len(arr_my)
     n_mutuals = len(arr_mutuals)
     min_dist_mutuals = float('inf')
@@ -347,8 +358,28 @@ def index():
                     hovertemplate: '%{text}<extra></extra>'
                 }
             ];
-            let layout = {margin: {l:0,r:0,b:0,t:0}};
-            let config = {responsive: true};
+            let layout = {
+                margin: {l:0,r:0,b:0,t:0},
+                scene: {
+                    dragmode: 'orbit',
+                    camera: {projection: {type: 'perspective'}},
+                },
+                autosize: true,
+                // Move the modebar (camera controls) to the bottom right
+                modebar: {
+                    orientation: 'v',
+                    bgcolor: 'rgba(255,255,255,0.7)',
+                    color: '#333',
+                    activecolor: '#007bff',
+                    position: 'bottom right',
+                },
+            };
+            let config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['sendDataToCloud'],
+                displaylogo: false,
+            };
             Plotly.newPlot('plot', plotData, layout, config);
             plotDiv = document.getElementById('plot');
             plotDiv.on('plotly_click', function(data){
