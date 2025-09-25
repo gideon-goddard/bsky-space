@@ -521,6 +521,221 @@ def index():
                 html += `<span><a href='#' onclick="openPost('${mutuals_uris[maxIdxMut]}');return false;">${mutuals_posts[maxIdxMut]}</a></span><br>`;
                 document.getElementById('newPostResults').innerHTML = html;
             };
+
+            // Utility: Fuzz a message by adding random special characters
+            function fuzzMessage(msg, fuzzLevel) {
+                const specials = '!@#$%^&*()_+-=[]{}|;:,.<>?/';
+                let arr = msg.split('');
+                for (let i = 0; i < fuzzLevel; ++i) {
+                    let idx = Math.floor(Math.random() * (arr.length + 1));
+                    let char = specials[Math.floor(Math.random() * specials.length)];
+                    arr.splice(idx, 0, char);
+                }
+                return arr.join('');
+            }
+
+            // Fuzz and plot until far from all nodes
+            async function fuzzUntilFar(msg, minDist = 10, maxTries = 50) {
+                let my_vectors = cachedVectors.my_vectors;
+                let mutuals_vectors = cachedVectors.mutuals_vectors;
+                let bestMsg = msg, bestVec = null, bestDist = -Infinity;
+                for (let fuzzLevel = 1; fuzzLevel <= maxTries; ++fuzzLevel) {
+                    let fuzzed = fuzzMessage(msg, fuzzLevel);
+                    let resp = await fetch('/vectorize_new_post', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: fuzzed })
+                    });
+                    let result = await resp.json();
+                    let v = result.vector;
+                    // Find closest distance to any node
+                    let minDistAny = Infinity;
+                    for (let i = 0; i < my_vectors.length; ++i) {
+                        let d = Math.sqrt(
+                            Math.pow(v[0] - my_vectors[i][0], 2) +
+                            Math.pow(v[1] - my_vectors[i][1], 2) +
+                            Math.pow(v[2] - my_vectors[i][2], 2)
+                        );
+                        if (d < minDistAny) minDistAny = d;
+                    }
+                    for (let i = 0; i < mutuals_vectors.length; ++i) {
+                        let d = Math.sqrt(
+                            Math.pow(v[0] - mutuals_vectors[i][0], 2) +
+                            Math.pow(v[1] - mutuals_vectors[i][1], 2) +
+                            Math.pow(v[2] - mutuals_vectors[i][2], 2)
+                        );
+                        if (d < minDistAny) minDistAny = d;
+                    }
+                    if (minDistAny > bestDist) {
+                        bestDist = minDistAny;
+                        bestMsg = fuzzed;
+                        bestVec = v;
+                    }
+                    if (minDistAny >= minDist) {
+                        break;
+                    }
+                }
+                // Plot the best fuzzed message
+                if (bestVec) {
+                    let trace = {
+                        x: [bestVec[0]], y: [bestVec[1]], z: [bestVec[2]],
+                        mode: 'markers', type: 'scatter3d',
+                        marker: { size: 10, color: 'orange' },
+                        name: 'Fuzzed Post',
+                        text: [`<b>Fuzzed Post</b><br>${bestMsg}`],
+                        hovertemplate: '%{text}<extra></extra>'
+                    };
+                    Plotly.addTraces('plot', trace);
+                    document.getElementById('newPostResults').innerHTML += `<br><b>Fuzzed farthest post:</b> <span>${bestMsg}</span> (min distance to any node: ${bestDist.toFixed(4)})`;
+                }
+            }
+
+            // Compute the center and radius of the main sphere
+            function getMainSphereInfo(my_vectors, mutuals_vectors) {
+                let all = my_vectors.concat(mutuals_vectors);
+                let n = all.length;
+                let center = [0,0,0];
+                for (let i = 0; i < n; ++i) {
+                    center[0] += all[i][0];
+                    center[1] += all[i][1];
+                    center[2] += all[i][2];
+                }
+                center = center.map(x => x/n);
+                let maxR = 0;
+                for (let i = 0; i < n; ++i) {
+                    let d = Math.sqrt(
+                        Math.pow(all[i][0] - center[0], 2) +
+                        Math.pow(all[i][1] - center[1], 2) +
+                        Math.pow(all[i][2] - center[2], 2)
+                    );
+                    if (d > maxR) maxR = d;
+                }
+                return {center, radius: maxR};
+            }
+
+            // Fuzz and plot until outside the edge of the main sphere
+            async function fuzzUntilOutsideSphere(msg, maxTries = 100) {
+                let my_vectors = cachedVectors.my_vectors;
+                let mutuals_vectors = cachedVectors.mutuals_vectors;
+                let {center, radius} = getMainSphereInfo(my_vectors, mutuals_vectors);
+                let bestMsg = msg, bestVec = null, bestDist = -Infinity;
+                for (let fuzzLevel = 1; fuzzLevel <= maxTries; ++fuzzLevel) {
+                    let fuzzed = fuzzMessage(msg, fuzzLevel);
+                    let resp = await fetch('/vectorize_new_post', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: fuzzed })
+                    });
+                    let result = await resp.json();
+                    let v = result.vector;
+                    // Distance from center
+                    let distFromCenter = Math.sqrt(
+                        Math.pow(v[0] - center[0], 2) +
+                        Math.pow(v[1] - center[1], 2) +
+                        Math.pow(v[2] - center[2], 2)
+                    );
+                    if (distFromCenter > bestDist) {
+                        bestDist = distFromCenter;
+                        bestMsg = fuzzed;
+                        bestVec = v;
+                    }
+                    if (distFromCenter > radius) {
+                        break;
+                    }
+                }
+                // Plot the best fuzzed message
+                if (bestVec) {
+                    let trace = {
+                        x: [bestVec[0]], y: [bestVec[1]], z: [bestVec[2]],
+                        mode: 'markers', type: 'scatter3d',
+                        marker: { size: 12, color: 'orange', symbol: 'diamond' },
+                        name: 'Fuzzed Outside',
+                        text: [`<b>Fuzzed Outside</b><br>${bestMsg}`],
+                        hovertemplate: '%{text}<extra></extra>'
+                    };
+                    Plotly.addTraces('plot', trace);
+                    document.getElementById('newPostResults').innerHTML += `<br><b>Fuzzed outside sphere:</b> <span>${bestMsg}</span> (distance from center: ${bestDist.toFixed(4)}, sphere radius: ${radius.toFixed(4)})`;
+                }
+            }
+
+            // Fuzz and plot until way outside the edge of the main sphere
+            async function fuzzUntilWayOutsideSphere(msg, factor = 3, maxTries = 200) {
+                let my_vectors = cachedVectors.my_vectors;
+                let mutuals_vectors = cachedVectors.mutuals_vectors;
+                let {center, radius} = getMainSphereInfo(my_vectors, mutuals_vectors);
+                let targetRadius = radius * factor;
+                let bestMsg = msg, bestVec = null, bestDist = -Infinity;
+                for (let fuzzLevel = 1; fuzzLevel <= maxTries; ++fuzzLevel) {
+                    let fuzzed = fuzzMessage(msg, fuzzLevel);
+                    let resp = await fetch('/vectorize_new_post', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: fuzzed })
+                    });
+                    let result = await resp.json();
+                    let v = result.vector;
+                    // Distance from center
+                    let distFromCenter = Math.sqrt(
+                        Math.pow(v[0] - center[0], 2) +
+                        Math.pow(v[1] - center[1], 2) +
+                        Math.pow(v[2] - center[2], 2)
+                    );
+                    if (distFromCenter > bestDist) {
+                        bestDist = distFromCenter;
+                        bestMsg = fuzzed;
+                        bestVec = v;
+                    }
+                    if (distFromCenter > targetRadius) {
+                        break;
+                    }
+                }
+                // Plot the best fuzzed message
+                if (bestVec) {
+                    let trace = {
+                        x: [bestVec[0]], y: [bestVec[1]], z: [bestVec[2]],
+                        mode: 'markers', type: 'scatter3d',
+                        marker: { size: 14, color: 'magenta', symbol: 'star' },
+                        name: 'Way Outside',
+                        text: [`<b>Way Outside</b><br>${bestMsg}`],
+                        hovertemplate: '%{text}<extra></extra>'
+                    };
+                    Plotly.addTraces('plot', trace);
+                    document.getElementById('newPostResults').innerHTML += `<br><b>Way outside sphere:</b> <span>${bestMsg}</span> (distance from center: ${bestDist.toFixed(4)}, sphere radius: ${radius.toFixed(4)}, factor: ${factor})`;
+                }
+            }
+
+            // Add button to fuzz message and plot outside sphere
+            let fuzzBtn = document.createElement('button');
+            fuzzBtn.textContent = 'Fuzz & Plot Outside Sphere';
+            fuzzBtn.style.marginLeft = '1em';
+            fuzzBtn.onclick = async function() {
+                let postText = document.getElementById('newPostInput').value.trim();
+                if (!postText) return;
+                await fuzzUntilOutsideSphere(postText, 100);
+            };
+            document.getElementById('newPostForm').appendChild(fuzzBtn);
+
+            // Add button to fuzz message and plot farthest
+            let fuzzBtnFar = document.createElement('button');
+            fuzzBtnFar.textContent = 'Fuzz & Plot Far';
+            fuzzBtnFar.style.marginLeft = '1em';
+            fuzzBtnFar.onclick = async function() {
+                let postText = document.getElementById('newPostInput').value.trim();
+                if (!postText) return;
+                await fuzzUntilFar(postText, 10, 50);
+            };
+            document.getElementById('newPostForm').appendChild(fuzzBtnFar);
+
+            // Add button to fuzz message and plot way outside sphere
+            let fuzzBtnWayOutside = document.createElement('button');
+            fuzzBtnWayOutside.textContent = 'Fuzz & Plot Way Outside Sphere';
+            fuzzBtnWayOutside.style.marginLeft = '1em';
+            fuzzBtnWayOutside.onclick = async function() {
+                let postText = document.getElementById('newPostInput').value.trim();
+                if (!postText) return;
+                await fuzzUntilWayOutsideSphere(postText, 3, 200);
+            };
+            document.getElementById('newPostForm').appendChild(fuzzBtnWayOutside);
         });
         </script>
     </body>
