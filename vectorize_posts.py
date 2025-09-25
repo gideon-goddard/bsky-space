@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from atproto import Client
 from sentence_transformers import SentenceTransformer
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 from tqdm import tqdm
@@ -241,6 +241,23 @@ def get_stats():
 def highlighted():
     return JSONResponse({"highlighted": None})
 
+@app.post("/vectorize_new_post")
+async def vectorize_new_post(request: Request):
+    data = await request.json()
+    text = data.get("text", "")
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+    # Use the same PCA as the main data
+    main_data = get_my_data()
+    # Re-fit PCA on all existing vectors (user + mutuals)
+    all_vectors = np.vstack([main_data["vectors"], main_data["mutuals_vectors"]])
+    pca = PCA(n_components=3)
+    pca.fit(all_vectors)
+    # Vectorize and project the new post
+    new_vec = model.encode([text])[0]
+    new_vec_3d = pca.transform([new_vec])[0].tolist()
+    return JSONResponse({"vector": new_vec_3d})
+
 @app.get("/")
 def index():
     html = '''
@@ -259,8 +276,14 @@ def index():
         <h2>3D Visualization of Your Bluesky Posts vs Mutuals Feed</h2>
         <div id="plot" style="width:100vw;height:70vh;"></div>
         <div id="pairs" style="width:100vw;"></div>
+        <form id="newPostForm" style="margin:2em 0;">
+            <label for="newPostInput"><b>Test a new post:</b></label>
+            <input type="text" id="newPostInput" style="width:40em;" placeholder="Type your post here...">
+            <button type="submit">Add to graph</button>
+        </form>
+        <div id="newPostResults"></div>
         <script>
-        let plotData, plotDiv;
+        let plotData, plotDiv, newPostTraceIdx = null;
         function uriToUrl(uri) {
             let parts = uri.split('/');
             if (parts.length < 5) return '';
@@ -275,21 +298,21 @@ def index():
         let highlightLine = null;
         function clearHighlights() {
             let plotDiv = document.getElementById('plot');
-            // Remove all extra traces (lines) beyond the main scatter traces
+            // Remove all extra traces (lines and new post) beyond the main scatter traces
             while (plotDiv.data.length > 2) {
                 Plotly.deleteTraces('plot', plotDiv.data.length - 1);
             }
             highlightLine = null;
-            // Reset all node colors (no highlight)
+            newPostTraceIdx = null;
             if (plotData) {
                 Plotly.restyle('plot', { marker: { color: Array(plotData[0].x.length).fill('blue'), size: 5 } }, [0]);
                 Plotly.restyle('plot', { marker: { color: Array(plotData[1].x.length).fill('purple'), size: 5 } }, [1]);
             }
             document.querySelectorAll('.pair-list li.selected').forEach(li => li.classList.remove('selected'));
+            document.getElementById('newPostResults').innerHTML = '';
         }
         function highlightPair(idxA, idxB) {
             clearHighlights();
-            // Only draw the line, do not change node colors or sizes
             if (typeof idxA === 'number' && typeof idxB === 'number') {
                 let xA = plotData[0].x[idxA], yA = plotData[0].y[idxA], zA = plotData[0].z[idxA];
                 let xB = plotData[1].x[idxB], yB = plotData[1].y[idxB], zB = plotData[1].z[idxB];
@@ -307,8 +330,10 @@ def index():
                 highlightLine = plotData.length;
             }
         }
+        let cachedVectors = null;
         fetch('/vectors').then(r => r.json()).then(data => {
             plotData = [];
+            cachedVectors = data;
             let my_vectors = data.my_vectors;
             let my_posts = data.my_posts;
             let my_uris = data.my_uris;
@@ -373,7 +398,6 @@ def index():
             plotDiv = document.getElementById('plot');
             plotDiv.on('plotly_click', function(data){
                 var point = data.points[0];
-                // Only handle clicks on marker points, not lines
                 if (point && point.customdata) {
                     var uri = point.customdata;
                     openPost(uri);
@@ -398,6 +422,63 @@ def index():
                 html += '</ul>';
                 document.getElementById('pairs').innerHTML = html;
             });
+            // New post form logic
+            document.getElementById('newPostForm').onsubmit = async function(e) {
+                e.preventDefault();
+                clearHighlights();
+                let postText = document.getElementById('newPostInput').value.trim();
+                if (!postText) return;
+                // Call backend to vectorize and project the new post
+                let resp = await fetch('/vectorize_new_post', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: postText })
+                });
+                let result = await resp.json();
+                let v = result.vector;
+                // Add new post to plot in red
+                let trace = {
+                    x: [v[0]], y: [v[1]], z: [v[2]],
+                    mode: 'markers', type: 'scatter3d',
+                    marker: { size: 8, color: 'red' },
+                    name: 'New Post',
+                    text: [`<b>New Post</b><br>${postText}`],
+                    hovertemplate: '%{text}<extra></extra>'
+                };
+                Plotly.addTraces('plot', trace);
+                newPostTraceIdx = plotDiv.data.length - 1;
+                // Calculate closest/farthest to my posts and mutuals
+                let minDistMy = Infinity, maxDistMy = -Infinity, minIdxMy = -1, maxIdxMy = -1;
+                for (let i = 0; i < my_vectors.length; ++i) {
+                    let d = Math.sqrt(
+                        Math.pow(v[0] - my_vectors[i][0], 2) +
+                        Math.pow(v[1] - my_vectors[i][1], 2) +
+                        Math.pow(v[2] - my_vectors[i][2], 2)
+                    );
+                    if (d < minDistMy) { minDistMy = d; minIdxMy = i; }
+                    if (d > maxDistMy) { maxDistMy = d; maxIdxMy = i; }
+                }
+                let minDistMut = Infinity, maxDistMut = -Infinity, minIdxMut = -1, maxIdxMut = -1;
+                for (let i = 0; i < mutuals_vectors.length; ++i) {
+                    let d = Math.sqrt(
+                        Math.pow(v[0] - mutuals_vectors[i][0], 2) +
+                        Math.pow(v[1] - mutuals_vectors[i][1], 2) +
+                        Math.pow(v[2] - mutuals_vectors[i][2], 2)
+                    );
+                    if (d < minDistMut) { minDistMut = d; minIdxMut = i; }
+                    if (d > maxDistMut) { maxDistMut = d; maxIdxMut = i; }
+                }
+                let html = `<h4>New Post Results</h4>`;
+                html += `<b>Closest to My Posts:</b> (distance: ${minDistMy.toFixed(4)})<br>`;
+                html += `<span><a href='#' onclick="openPost('${my_uris[minIdxMy]}');return false;">${my_posts[minIdxMy]}</a></span><br>`;
+                html += `<b>Farthest from My Posts:</b> (distance: ${maxDistMy.toFixed(4)})<br>`;
+                html += `<span><a href='#' onclick="openPost('${my_uris[maxIdxMy]}');return false;">${my_posts[maxIdxMy]}</a></span><br>`;
+                html += `<b>Closest to Mutuals:</b> (distance: ${minDistMut.toFixed(4)})<br>`;
+                html += `<span><a href='#' onclick="openPost('${mutuals_uris[minIdxMut]}');return false;">${mutuals_posts[minIdxMut]}</a></span><br>`;
+                html += `<b>Farthest from Mutuals:</b> (distance: ${maxDistMut.toFixed(4)})<br>`;
+                html += `<span><a href='#' onclick="openPost('${mutuals_uris[maxIdxMut]}');return false;">${mutuals_posts[maxIdxMut]}</a></span><br>`;
+                document.getElementById('newPostResults').innerHTML = html;
+            };
         });
         </script>
     </body>
