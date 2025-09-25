@@ -475,7 +475,7 @@ def index():
                     if (d < minDistMut) { minDistMut = d; minIdxMut = i; }
                     if (d > maxDistMut) { maxDistMut = d; maxIdxMut = i; }
                 }
-                // Draw lines for closest and farthest pairs
+                // Draw lines for closest and then farthest pairs (order matters)
                 let lineTraceClosestMy = {
                     x: [v[0], my_vectors[minIdxMy][0]],
                     y: [v[1], my_vectors[minIdxMy][1]],
