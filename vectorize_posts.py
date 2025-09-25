@@ -475,6 +475,41 @@ def index():
                     if (d < minDistMut) { minDistMut = d; minIdxMut = i; }
                     if (d > maxDistMut) { maxDistMut = d; maxIdxMut = i; }
                 }
+                // Draw lines for closest and farthest pairs
+                let lineTraceClosestMy = {
+                    x: [v[0], my_vectors[minIdxMy][0]],
+                    y: [v[1], my_vectors[minIdxMy][1]],
+                    z: [v[2], my_vectors[minIdxMy][2]],
+                    mode: 'lines', type: 'scatter3d',
+                    line: { color: 'green', width: 5 },
+                    showlegend: false
+                };
+                let lineTraceFarthestMy = {
+                    x: [v[0], my_vectors[maxIdxMy][0]],
+                    y: [v[1], my_vectors[maxIdxMy][1]],
+                    z: [v[2], my_vectors[maxIdxMy][2]],
+                    mode: 'lines', type: 'scatter3d',
+                    line: { color: 'red', width: 5 },
+                    showlegend: false
+                };
+                let lineTraceClosestMut = {
+                    x: [v[0], mutuals_vectors[minIdxMut][0]],
+                    y: [v[1], mutuals_vectors[minIdxMut][1]],
+                    z: [v[2], mutuals_vectors[minIdxMut][2]],
+                    mode: 'lines', type: 'scatter3d',
+                    line: { color: 'green', width: 5, dash: 'dot' },
+                    showlegend: false
+                };
+                let lineTraceFarthestMut = {
+                    x: [v[0], mutuals_vectors[maxIdxMut][0]],
+                    y: [v[1], mutuals_vectors[maxIdxMut][1]],
+                    z: [v[2], mutuals_vectors[maxIdxMut][2]],
+                    mode: 'lines', type: 'scatter3d',
+                    line: { color: 'red', width: 5, dash: 'dot' },
+                    showlegend: false
+                };
+                Plotly.addTraces('plot', [lineTraceClosestMy, lineTraceFarthestMy, lineTraceClosestMut, lineTraceFarthestMut]);
+                // Show results
                 let html = `<h4>New Post Results</h4>`;
                 html += `<b>Closest to My Posts:</b> (distance: ${minDistMy.toFixed(4)})<br>`;
                 html += `<span><a href='#' onclick="openPost('${my_uris[minIdxMy]}');return false;">${my_posts[minIdxMy]}</a></span><br>`;
