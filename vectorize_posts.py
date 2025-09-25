@@ -414,8 +414,14 @@ def index():
                     let dist = distance_matrix[idxA][idxB];
                     return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair(${idxA},${idxB});this.classList.add('selected');">
                         <b>${label} pair</b> (distance: ${dist.toFixed(4)})<br>
-                        <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
-                        <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
+                        <span>
+                            <a href='#' onclick="event.stopPropagation();highlightPair(${idxA},${idxB});return false;">My Post: ${my_post}</a>
+                            <button class='pair-btn' onclick="event.stopPropagation();openPost('${my_uri}')">Open</button>
+                        </span><br>
+                        <span>
+                            <a href='#' onclick="event.stopPropagation();highlightPair(${idxA},${idxB});return false;">Mutuals: ${other_post}</a>
+                            <button class='pair-btn' onclick="event.stopPropagation();openPost('${other_uri}')">Open</button>
+                        </span>
                     </li>`;
                 }
                 html += pairItem(stats.closest_mutuals, 'Closest');
