@@ -34,6 +34,9 @@ def fetch_my_posts_with_uris():
         feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
         for item in tqdm(feed.feed, desc=f"Processing page {page} posts", leave=False):
             try:
+                # Skip reposts
+                if hasattr(item, 'reason') and getattr(item.reason, '$type', None) == "app.bsky.feed.defs#reasonRepost":
+                    continue
                 text = item.post.record.text
                 uri = item.post.uri
                 if text:
@@ -92,11 +95,15 @@ def fetch_mutuals_posts(limit=50):
         page_posts = []
         for item in tqdm(feed.feed, desc=f"Processing mutuals page {page}", leave=False):
             try:
+                # Skip reposts
+                if hasattr(item, 'reason') and getattr(item.reason, '$type', None) == "app.bsky.feed.defs#reasonRepost":
+                    continue
                 text = item.post.record.text
                 author = getattr(item.post, 'author', None)
                 did = getattr(author, 'did', None) if author else None
-                # Filter out posts by the current user
-                if text and did != client.me.did:
+                # Filter out posts by the current user and reposts
+                is_repost = getattr(item.post.record, 'reply', None) is not None or getattr(item.post.record, 'repost', None) is not None
+                if text and did != client.me.did and not is_repost:
                     posts.append(text)
                     page_posts.append(text)
                     uris.append(item.post.uri)
@@ -128,9 +135,7 @@ def process_firehose_post(post):
 def get_my_data():
     print("Fetching and vectorizing all your posts (cached)...")
     posts, uris = fetch_my_posts_with_uris()
-    # Remove the 50-post limit
     raw_vectors = model.encode(posts, show_progress_bar=True)
-    # Fit PCA on all vectors (user + mutuals)
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
     raw_mutuals_vectors = model.encode(mutuals_posts, show_progress_bar=True)
     all_vectors = np.vstack([raw_vectors, raw_mutuals_vectors])
@@ -187,7 +192,8 @@ def get_my_data():
         "mutuals_uris": mutuals_uris,
         "closest_mutuals": closest_mutuals,
         "farthest_mutuals": farthest_mutuals,
-        "distance_matrix": distance_matrix.tolist()
+        "distance_matrix": distance_matrix.tolist(),
+        "pca": pca
     }
 
 def sanitize_json(obj):
@@ -247,13 +253,8 @@ async def vectorize_new_post(request: Request):
     text = data.get("text", "")
     if not text:
         return JSONResponse({"error": "No text provided"}, status_code=400)
-    # Use the same PCA as the main data
     main_data = get_my_data()
-    # Re-fit PCA on all existing vectors (user + mutuals)
-    all_vectors = np.vstack([main_data["vectors"], main_data["mutuals_vectors"]])
-    pca = PCA(n_components=3)
-    pca.fit(all_vectors)
-    # Vectorize and project the new post
+    pca = main_data["pca"]
     new_vec = model.encode([text])[0]
     new_vec_3d = pca.transform([new_vec])[0].tolist()
     return JSONResponse({"vector": new_vec_3d})
