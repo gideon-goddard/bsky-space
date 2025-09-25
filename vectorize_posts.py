@@ -23,30 +23,30 @@ client.login(BLUESKY_HANDLE, BLUESKY_PASSWORD)
 # Initialize sentence transformer
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-def fetch_my_posts():
-    print("Fetching all your posts...")
+def fetch_my_posts_with_uris():
+    print("Fetching all your posts with URIs...")
     posts = []
+    uris = []
     cursor = None
     page = 1
     while True:
         print(f"Fetching page {page} of your posts...")
         feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
-        page_posts = []
         for item in tqdm(feed.feed, desc=f"Processing page {page} posts", leave=False):
             try:
                 text = item.post.record.text
+                uri = item.post.uri
                 if text:
                     posts.append(text)
-                    page_posts.append(text)
+                    uris.append(uri)
             except AttributeError:
                 continue
-        print(f"Fetched {len(page_posts)} posts from page {page}.")
         cursor = getattr(feed, 'cursor', None)
         if not cursor:
             break
         page += 1
     print(f"Total posts fetched: {len(posts)}")
-    return posts
+    return posts, uris
 
 def fetch_discover_posts(limit=50):
     print(f"Fetching up to {limit} posts from the discover feed...")
@@ -124,7 +124,9 @@ def process_firehose_post(post):
 @lru_cache(maxsize=1)
 def get_my_data():
     print("Fetching and vectorizing all your posts (cached)...")
-    posts = fetch_my_posts()[:50]  # Limit to 50 posts for development
+    posts, uris = fetch_my_posts_with_uris()
+    posts = posts[:50]
+    uris = uris[:50]
     raw_vectors = model.encode(posts, show_progress_bar=True)
     # Fit PCA on all vectors (user + mutuals)
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
@@ -135,25 +137,6 @@ def get_my_data():
     pca.fit(all_vectors)
     vectors = pca.transform(raw_vectors)
     mutuals_vectors = pca.transform(raw_mutuals_vectors)
-    print("Fetching URIs for your posts...")
-    uris = []
-    cursor = None
-    total_uris = 0
-    with tqdm(total=len(posts), desc="Fetching URIs for your posts") as pbar:
-        while total_uris < len(posts):
-            batch_limit = min(100, len(posts) - total_uris)
-            feed = client.get_author_feed(BLUESKY_HANDLE, cursor=cursor)
-            for item in tqdm(feed.feed, desc=f"Processing URI batch", leave=False):
-                try:
-                    uris.append(item.post.uri)
-                except AttributeError:
-                    uris.append("")
-            cursor = getattr(feed, 'cursor', None)
-            total_uris += len(feed.feed)
-            pbar.update(len(feed.feed))
-            if not cursor or not feed.feed:
-                break
-    # Calculate cross-set distances using only the 3D PCA vectors
     print("Calculating cross-set closest/farthest pairs...")
     arr_my = np.array(vectors)
     arr_mutuals = np.array(mutuals_vectors)
@@ -384,8 +367,11 @@ def index():
             plotDiv = document.getElementById('plot');
             plotDiv.on('plotly_click', function(data){
                 var point = data.points[0];
-                var uri = point.customdata;
-                openPost(uri);
+                // Only handle clicks on marker points, not lines
+                if (point && point.customdata) {
+                    var uri = point.customdata;
+                    openPost(uri);
+                }
             });
             // Pair results UI
             fetch('/stats').then(r => r.json()).then(stats => {
@@ -417,11 +403,11 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         uvicorn.run("vectorize_posts:app", host="0.0.0.0", port=8000, reload=True)
     else:
-        posts = fetch_my_posts()
+        posts = fetch_my_posts_with_uris()
         if not posts:
             print("No posts found. Debugging feed response...")
             feed = client.get_author_feed(BLUESKY_HANDLE)
             print("Raw feed:", feed)
         else:
-            vectors = vectorize_posts(posts)
-            print(f"Fetched {len(posts)} posts. First vector: {vectors[0]}")
+            vectors = vectorize_posts(posts[0])
+            print(f"Fetched {len(posts[0])} posts. First vector: {vectors[0]}")
