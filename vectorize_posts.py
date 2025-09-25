@@ -93,7 +93,10 @@ def fetch_mutuals_posts(limit=50):
         for item in tqdm(feed.feed, desc=f"Processing mutuals page {page}", leave=False):
             try:
                 text = item.post.record.text
-                if text:
+                author = getattr(item.post, 'author', None)
+                did = getattr(author, 'did', None) if author else None
+                # Filter out posts by the current user
+                if text and did != client.me.did:
                     posts.append(text)
                     page_posts.append(text)
                     uris.append(item.post.uri)
@@ -125,8 +128,7 @@ def process_firehose_post(post):
 def get_my_data():
     print("Fetching and vectorizing all your posts (cached)...")
     posts, uris = fetch_my_posts_with_uris()
-    posts = posts[:50]
-    uris = uris[:50]
+    # Remove the 50-post limit
     raw_vectors = model.encode(posts, show_progress_bar=True)
     # Fit PCA on all vectors (user + mutuals)
     mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(posts))
