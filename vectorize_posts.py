@@ -137,18 +137,22 @@ def get_my_data():
     pca.fit(all_vectors)
     vectors = pca.transform(raw_vectors)
     mutuals_vectors = pca.transform(raw_mutuals_vectors)
-    print("Calculating cross-set closest/farthest pairs...")
+    # Calculate cross-set closest/farthest pairs and distance matrix
+    print("Calculating cross-set closest/farthest pairs and distance matrix...")
     arr_my = np.array(vectors)
     arr_mutuals = np.array(mutuals_vectors)
     n_my = len(arr_my)
     n_mutuals = len(arr_mutuals)
+    # Pairwise distance matrix (my posts vs mutuals)
+    distance_matrix = np.zeros((n_my, n_mutuals))
     min_dist_mutuals = float('inf')
     max_dist_mutuals = float('-inf')
     min_pair_mutuals = None
     max_pair_mutuals = None
-    for i in tqdm(range(n_my), desc="Pairwise distance to mutuals"):
+    for i in range(n_my):
         for j in range(n_mutuals):
             dist = np.linalg.norm(arr_my[i] - arr_mutuals[j])
+            distance_matrix[i, j] = dist
             if dist < min_dist_mutuals:
                 min_dist_mutuals = dist
                 min_pair_mutuals = (i, j)
@@ -180,7 +184,8 @@ def get_my_data():
         "mutuals_vectors": mutuals_vectors,
         "mutuals_uris": mutuals_uris,
         "closest_mutuals": closest_mutuals,
-        "farthest_mutuals": farthest_mutuals
+        "farthest_mutuals": farthest_mutuals,
+        "distance_matrix": distance_matrix.tolist()
     }
 
 def sanitize_json(obj):
@@ -209,17 +214,16 @@ app = FastAPI()
 @app.get("/vectors")
 def get_vectors():
     data = get_my_data()
-    mutuals_posts, mutuals_uris = fetch_mutuals_posts(limit=len(data["posts"]))
-    mutuals_vectors = vectorize_posts(mutuals_posts)
     result = {
         "my_vectors": data["vectors"],
         "my_posts": data["posts"],
         "my_uris": data["uris"],
-        "mutuals_vectors": mutuals_vectors,
-        "mutuals_posts": mutuals_posts,
-        "mutuals_uris": mutuals_uris,
+        "mutuals_vectors": data["mutuals_vectors"],
+        "mutuals_posts": data["mutuals_posts"],
+        "mutuals_uris": data["mutuals_uris"],
         "closest_mutuals": data["closest_mutuals"],
-        "farthest_mutuals": data["farthest_mutuals"]
+        "farthest_mutuals": data["farthest_mutuals"],
+        "distance_matrix": data["distance_matrix"]
     }
     return JSONResponse(sanitize_json(result))
 
@@ -309,6 +313,7 @@ def index():
             let mutuals_vectors = data.mutuals_vectors;
             let mutuals_posts = data.mutuals_posts;
             let mutuals_uris = data.mutuals_uris;
+            let distance_matrix = data.distance_matrix;
             let x1 = my_vectors.map(v => v[0]);
             let y1 = my_vectors.map(v => v[1]);
             let z1 = my_vectors.map(v => v[2]);
@@ -348,7 +353,6 @@ def index():
                     camera: {projection: {type: 'perspective'}},
                 },
                 autosize: true,
-                // Move the modebar (camera controls) to the bottom right
                 modebar: {
                     orientation: 'v',
                     bgcolor: 'rgba(255,255,255,0.7)',
@@ -380,8 +384,9 @@ def index():
                     let idxA = pair.indices[0], idxB = pair.indices[1];
                     let my_post = pair.my_post, other_post = pair.mutuals_post;
                     let my_uri = pair.my_uri, other_uri = pair.mutuals_uri;
+                    let dist = distance_matrix[idxA][idxB];
                     return `<li id="${label}mutuals" onclick="clearHighlights();highlightPair(${idxA},${idxB});this.classList.add('selected');">
-                        <b>${label} pair</b> (distance: ${pair.distance.toFixed(4)})<br>
+                        <b>${label} pair</b> (distance: ${dist.toFixed(4)})<br>
                         <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${my_uri}\")\">My Post: ${my_post}</a></span><br>
                         <span><a href='#' onclick=\"event.stopPropagation();openPost(\"${other_uri}\")\">Mutuals: ${other_post}</a></span>
                     </li>`;
